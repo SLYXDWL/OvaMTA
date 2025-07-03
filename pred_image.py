@@ -1,0 +1,380 @@
+import cv2
+import matplotlib.pyplot as plt
+import torch
+import glob
+import argparse
+from lib.OvaMTA_seg import TransRaUNet_CLF_xiaorong as OvaMTA_OVASEG
+from lib.OvaMTA_diag import TransRaUNet_CLF_xiaorong as OvaMTA_CLF
+from datetime import datetime
+from lib.swim_transformer import swin_tiny_patch4_window7_224 as create_model
+# from lib.PraNet_Res2Net_PLAX import TransRaUNet_CLF_xiaorong
+# from utils.dataloader import get_loader,test_dataset,SegDataset
+from utils.utils import clip_gradient, adjust_lr, AvgMeter, WarmupMultiStepLR, _thresh
+import torch.optim.lr_scheduler as lr_scheduler
+from lib.PraNet_Res2Net_clinical_1 import TransRaUNet_CLF_INFO_FUSION_xiaorong
+
+from utils.focal_loss import Focal_loss, FocalLoss
+from utils.ghm_loss import GHMC,GHMR
+from scipy.interpolate import splprep,splev
+from utils.smooth_l1_loss import SmoothL1Loss
+from utils.utils import *
+import sklearn
+from sklearn.metrics import roc_curve
+import torch.nn as nn
+import torch.nn.functional as F
+import os
+import math
+import torch.utils.data as data
+import pandas as pd
+from pathlib import Path
+import numpy as np
+from tensorboardX import SummaryWriter
+import torchvision.transforms as transforms
+from PIL import Image
+import random
+from tqdm import tqdm
+def parse_option():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--epoch', type=int,
+                        default=100, help='epoch number')
+    parser.add_argument('--lr', type=float,
+                        default=1e-6, help='learning rate')
+    parser.add_argument('--batchsize', type=int,
+                        default=10, help='training batch size')
+    parser.add_argument('--testbatchsize', type=int,
+                        default=1, help='training batch size')
+    parser.add_argument('--trainsize', type=int,
+                        default=352, help='training dataset size')
+    parser.add_argument('--clip', type=float,
+                        default=0.5, help='gradient clipping margin')
+    parser.add_argument('--augmentation',
+                        default=True, help='choose to do random flip rotation')
+    parser.add_argument('--decay_rate', type=float,
+                        default=0.1, help='decay rate of learning rate')
+    parser.add_argument('--decay_epoch', type=int,
+                        default=15, help='every n epochs decay learning rate')
+    parser.add_argument('--train_save', type=str,
+                        default='Transunet_chaosheng_xiaorong_Fusion_CLF_FINAL')
+    parser.add_argument('--lrf', type=float, default=0.01)
+    parser.add_argument('--num_classes', type=int, default=4)
+    parser.add_argument('--weights', type=str, default='checkpoints/swin_tiny_patch4_window7_224.pth',
+                        help='initial weights path')
+    parser.add_argument('--freeze-layers', type=bool, default=False)
+
+    parser.add_argument('--exp_name', type=str, default='24-2-26',
+                        help='Tag of experiment')
+    parser.add_argument('--log_dir', type=str, default='log', help='Logger directory')
+    parser.add_argument('--ckpt_path', type=str, default=None, help='The path of pretrained model')
+    parser.add_argument('--epochs_dir', type=str, default=None, help='The path of pretrained model')
+    parser.add_argument('--category', type=str, default='all', help='Category of point clouds')
+    parser.add_argument('--visual_interval', type=int, default='100', help='visual_interval')
+    opt = parser.parse_args()
+    return opt
+def get_mask(lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, framelist,params):
+    lateral_map_5 = F.upsample(lateral_map_5, size=(params.trainsize, params.trainsize), mode='bilinear',
+                               align_corners=False)
+    lateral_map_4 = F.upsample(lateral_map_4, size=(params.trainsize, params.trainsize), mode='bilinear',
+                               align_corners=False)
+    lateral_map_3 = F.upsample(lateral_map_3, size=(params.trainsize, params.trainsize), mode='bilinear',
+                               align_corners=False)
+    lateral_map_2 = F.upsample(lateral_map_2, size=(params.trainsize, params.trainsize), mode='bilinear',
+                               align_corners=False)
+
+    res = F.upsample(lateral_map_5 + lateral_map_4 + lateral_map_3 + lateral_map_2,
+                     size=(params.trainsize, params.trainsize), mode='bilinear', align_corners=False)
+
+    framelist[1:, :, :, :] = framelist[:-1, :, :, :]
+
+    # print('framelist:',framelist.shape,framelist[:-1, :, :, :].shape,framelist[1:, :, :, :].shape)
+    framelist[0, :, :, :] = res[0].cpu().detach().numpy()
+    res = (framelist[0, :, :, :] * 4 + framelist[1, :, :, :] + framelist[2, :, :, :] + framelist[3, :, :,
+                                                                                       :] + framelist[4, :, :,
+                                                                                            :] + framelist[5, :, :,
+                                                                                                 :]) / 9
+    # print(i_f,framelist[0,:,:,:].sum(),framelist[1,:,:,:].sum(),framelist[2,:,:,:].sum(),framelist[3,:,:,:].sum(),framelist[4,:,:,:].sum(),framelist[5,:,:,:].sum())
+    # thre_use = 0.5 * res.min().cpu().detach().numpy() + 0.5 * res.max().cpu().detach().numpy()
+
+    res = np.array(res[0, :, :] > 0, dtype=np.uint8)
+    return res
+def patch_mask2mask(patch_mask, images, x1, x2, y1, y2):
+    mask = np.zeros((images.shape[0], images.shape[1]))
+    mask[x1:x2, y1:y2] = cv2.resize(patch_mask, ( y2 - y1,x2 - x1), interpolation=cv2.INTER_NEAREST)
+    return mask
+
+def image2masklist(frame, model, model_BM,Ovary_threshold,params,img_transform,framelist,video_path,frame_patch_list,i_f):
+    print('载入图片')
+    images = img_transform(Image.fromarray(frame))
+    images = images.reshape((1, 3, params.trainsize, params.trainsize))
+    images = images.to(device)
+    # print('image:',images.shape)
+    images = F.upsample(images, size=(params.trainsize, params.trainsize), mode='bilinear', align_corners=True)
+    print('模型粗分割')
+    lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, outputs1, features = model(images)
+    # --------粗分类结果---------
+    p0 = outputs1[0][0].item()
+    p1 = outputs1[0][1].item()
+    p2 = outputs1[0][2].item()
+    print('粗分类结果',p0,p1,p2)
+
+    # ------分割结果-------
+    # ------粗分割结果-------
+    res = get_mask(lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, framelist,params)
+    contours, hierarchy = cv2.findContours(res, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+    p0_patch_list, p1_patch_list, p2_patch_list = [], [], []
+    refine_res = []
+    rect_out = (0, 0, 0, 0)
+    for j in range(len(contours)):
+        # -------对每一个contours进行裁剪后决定-------
+        (x, y, w, h) = cv2.boundingRect(contours[j])
+        rect_out = (x, y, w, h)
+        # 找高清原图进行图片patch截取
+        img = np.array(frame, dtype=np.uint8)
+
+        if rect_out[0] != 0:
+            y1 = int((max(0, rect_out[0] - 10) / 352) * img.shape[1])
+            y2 = int((min(352, rect_out[0] + rect_out[2] + 10) / 352) * img.shape[1])
+            x1 = int((max(0, rect_out[1] - 10) / 352) * img.shape[0])
+            x2 = int((min(352, rect_out[1] + rect_out[3] + 10) / 352) * img.shape[0])
+            # print('img shape:', img.shape)
+            img_patch = img[x1:x2, y1:y2, :]
+            img_patch = cv2.resize(img_patch, (512, 512), interpolation=cv2.INTER_NEAREST)
+            out_path = os.path.join(r'.\app_test',
+                                    os.path.basename(video_path).split('.')[0] +'cut.png')
+            cv2.imencode('.png', img_patch)[1].tofile(out_path)
+        # ---------现在存好了当前图像的所有patch---------
+        # ---------对每一个patch进行进一步的判断-----------
+        # ---------如果不为卵巢---------
+        if p0 < Ovary_threshold:
+            if rect_out[0] != 0:
+                print('粗分类为结节')
+                # ------------使用patch进行良恶性预测------------
+                img_patch = Image.open(out_path).convert("RGB")
+                img_patch = img_transform(img_patch)
+                img_patch = img_patch.reshape((1, 3, params.trainsize, params.trainsize))
+                img_patch = img_patch.to(device)
+                img_patch = F.upsample(img_patch, size=(params.trainsize, params.trainsize), mode='bilinear',
+                                       align_corners=True)
+
+                lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, outputs1_BM, features = model_BM(
+                    img_patch)
+                patch_mask = get_mask(lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, frame_patch_list,params)
+
+                refine_res.append(patch_mask2mask(patch_mask,img, x1, x2, y1, y2))
+
+                p1, p2 = outputs1_BM[0][0].item(), outputs1_BM[0][1].item()
+                # print('看看概率和：', p1, p2, p1 + p2)
+                if p1 > 0.65:
+                    pred = 1
+                else:
+                    pred = 2
+            else:
+                _, pred = torch.max(outputs1.data, dim=1)
+        # ---------如果判断为卵巢---------
+        elif p0 >= Ovary_threshold:
+            print('粗分类为卵巢')
+            # ------------使用patch进行预测------------
+            if rect_out[0] != 0:
+                img_patch = Image.open(out_path).convert("RGB")
+                img_patch = img_transform(img_patch)
+                img_patch = img_patch.reshape((1, 3, params.trainsize, params.trainsize))
+                img_patch = img_patch.to(device)
+                img_patch = F.upsample(img_patch, size=(params.trainsize, params.trainsize), mode='bilinear',
+                                       align_corners=True)
+
+                lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, outputs1_ON, features = model(img_patch)
+                patch_mask = get_mask(lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, frame_patch_list,params)
+                refine_res.append(patch_mask2mask(patch_mask,img, x1, x2, y1, y2))
+
+                p0, p1, p2 = outputs1_ON[0][0].item(), outputs1_ON[0][1].item(), outputs1_ON[0][2].item()
+                # print('看看概率和：', p1, p2, p1 + p2)
+                if p0 > 0.1:
+                    pred = 0
+                elif p1 > 0.65:
+                    pred = 1
+                else:
+                    pred = 2
+            else:
+                _, pred = torch.max(outputs1.data, dim=1)
+        p0_patch_list.append(p0)
+        p1_patch_list.append(p1)
+        p2_patch_list.append(p2)
+    return refine_res, p0_patch_list, p1_patch_list, p2_patch_list
+
+def compute_acc_dice_iou(res,gt):
+    gt = gt.squeeze()
+    gt = np.asarray(gt, np.float32)
+    gt /= (gt.max() + 1e-8)
+
+    input = res
+    target = np.array(gt)
+    # input = _thresh(input)
+    target = _thresh(target)
+    smooth = 1
+    input_flat = np.reshape(input, (-1))
+    target_flat = np.reshape(target, (-1))
+
+    intersection = (input_flat * target_flat)
+    unin_sum = np.array((target + input) > 0, dtype=int)
+    iou = intersection.sum() / unin_sum.sum()
+    acc = (input_flat==target_flat).sum() / len(input_flat)
+    dice = 2 * intersection.sum() / (input.sum() + target.sum())
+    return iou,dice,acc
+
+def compute_hd(smoothed_contour_pred,contours_gt):
+    from scipy.spatial.distance import directed_hausdorff
+    if len(smoothed_contour_pred)==0:
+        return float('inf')
+    else:
+        return max(directed_hausdorff(smoothed_contour_pred,contours_gt)[0],directed_hausdorff(contours_gt,smoothed_contour_pred)[0])
+
+def pred_image(model,model_BM,device,params,image_path):
+    Ovary_threshold=0.1
+    print('模型变为测试模式')
+    model.eval()
+    model_BM.eval()
+    img_transform = transforms.Compose([
+        transforms.Resize((params.trainsize, params.trainsize)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])])
+    # ------找videopath对应的mask------
+    # anonationdir = os.path.join(r"C:\Users\install-44\卵巢动态数据集文件1.1.0.1_to代\有病灶", 'MarkDB',
+    #                             video_path.split('\\')[6], video_path.split('\\')[7])
+    # print(anonationdir)
+    # annotations = glob.glob(anonationdir + '\\*\\*.png')
+    # print('标注帧数：',len(annotations))
+    # annotatedframeid=[int(annotation.split('\\')[-1].split('_')[-2]) for annotation in annotations]
+
+    i_f = 0
+    # t_f = np.arange(0, 20, 1)*np.ones((7,1))
+    component_mass_list=np.zeros((3,500))
+    chafenlist =np.zeros(6)
+    framelist = np.zeros((6,3,352,352))
+    frame_patch_list=np.zeros((6,3,352,352))
+    predList,p0List,p1List,p2List,annotation_typeList=[],[],[],[],[]
+    Iou=[]
+
+    frame=cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), flags=cv2.IMREAD_COLOR)
+
+    print('开始读帧',i_f)
+    siou, sdice, sacc = -1, -1, -1
+    print('将图片进行mask预测image2masklist')
+    (refine_res,
+     p0_patch_list, p1_patch_list, p2_patch_list)=image2masklist(frame,
+                                                                 model, model_BM,Ovary_threshold,
+                                                                 params,img_transform,framelist,
+                                                                 image_path,frame_patch_list,i_f)
+    # print('res.shape', np.array(refine_res).shape)
+    res=np.zeros((frame.shape[0],frame.shape[1]))
+    for i_rf in range(len(refine_res)):
+        res+=refine_res[i_rf]
+
+    images = img_transform(Image.fromarray(frame))
+    images = images.reshape((1, 3, params.trainsize, params.trainsize))
+    images = images.to(device)
+    # print('image:',images.shape)
+    images = F.upsample(images, size=(params.trainsize, params.trainsize), mode='bilinear', align_corners=True)
+    # ------用于画contour------
+    canvas = cv2.normalize(images[0, 0, :, :].cpu().detach().numpy(), None, 0, 1, cv2.NORM_MINMAX)
+    # ------用于画框------
+    canvas2 = cv2.normalize(images[0, 0, :, :].cpu().detach().numpy(), None, 0, 1, cv2.NORM_MINMAX)
+
+    p0=np.array(p0_patch_list).mean()
+    p1 = np.array(p1_patch_list).mean()
+    p2 = np.array(p2_patch_list).mean()
+    if p0>0.1:
+        pred=0
+    elif p1>0.65:
+        pred=1
+    else:
+        pred=2
+
+    predList.append(pred)
+    p0List.append(p0)
+    p1List.append(p1)
+    p2List.append(p2)
+
+    subimg1 = cv2.normalize(images[0, 0, :, :].cpu().detach().numpy(), None, 0, 255, cv2.NORM_MINMAX)
+    subimg1 = cv2.cvtColor(subimg1.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+    res = cv2.resize(res, (352, 352), interpolation=cv2.INTER_NEAREST)
+    contours_res, hierarchy = cv2.findContours(np.array(res, dtype=np.uint8), cv2.RETR_EXTERNAL,
+                                               cv2.CHAIN_APPROX_NONE)
+    canvas2 = cv2.drawContours(canvas2, contours_res, -1, (1, 1, 1), 3)
+    subimg2 = cv2.normalize(canvas2, None, 0, 255, cv2.NORM_MINMAX)
+    subimg2=cv2.cvtColor(subimg2.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+
+    canvas = cv2.cvtColor(canvas, cv2.COLOR_GRAY2RGB)
+    for j in range(len(contours_res)):
+        (x, y, w, h) = cv2.boundingRect(contours_res[j])
+
+        if pred==0:
+            cv2.putText(canvas, 'Ovary %.3f'%(p0), (x-10, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (1, 1, 1), 2)
+            canvas = cv2.rectangle(canvas, pt1=(x - 10, y - 10), pt2=(x + w + 10, y + h + 10), color=(1, 1, 1),
+                                   thickness=2)
+
+        elif pred==1:
+            cv2.putText(canvas, 'Benign %.3f'%(p1), (x-10, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 1, 0), 2)
+            canvas = cv2.rectangle(canvas, pt1=(x - 10, y - 10), pt2=(x + w + 10, y + h + 10), color=(0, 1, 0),
+                                   thickness=2)
+        elif pred==2:
+            cv2.putText(canvas, 'Malignant %.3f'%(p2), (x-10, y-15), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (0, 0, 1), 2)
+            canvas = cv2.rectangle(canvas, pt1=(x - 10, y - 10), pt2=(x + w + 10, y + h + 10), color=(0, 0, 1),
+                                   thickness=2)
+    subimg3 = cv2.normalize(canvas, None, 0, 255, cv2.NORM_MINMAX)
+
+    subimg4 = cv2.normalize(res, None, 0, 255, cv2.NORM_MINMAX)
+    subimg4 = cv2.cvtColor(subimg4.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+    cv2.putText(subimg4, 'pred', (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                (255, 255, 255), 2)
+
+    subimg5 = cv2.normalize(framelist[0, 0, :, :], None, 0, 255, cv2.NORM_MINMAX)
+    # print(framelist[0, 0, :, :].shape)
+    subimg5 = cv2.cvtColor(subimg5.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+    subimg6 = cv2.normalize(framelist[1, 0, :, :], None, 0, 255, cv2.NORM_MINMAX)
+    subimg6 = cv2.cvtColor(subimg6.astype(np.uint8), cv2.COLOR_GRAY2RGB)
+    print(subimg4.shape, subimg5.shape, subimg6.shape)
+    subimgs1 = np.concatenate([subimg1, subimg2, subimg3], 1)
+    subimgs2 = np.concatenate([subimg4, subimg5, subimg6], 1)
+    print(subimgs1.shape,subimgs2.shape)
+    IMG = np.concatenate([subimgs1, subimgs2], 0)
+
+    cv2.imencode('.png', IMG)[1].tofile(
+        os.path.join(r".\app_test",
+                     os.path.basename(image_path)))
+
+    #p0_patch_list, p1_patch_list, p2_patch_list
+    print('>>>>>>>>>>>>>>>>>>>>>>>>>>>>',os.path.basename(image_path),'帧',i_f,'预测为:',pred, '分割iou:',siou, '分割dice:',sdice)#, sacc)
+
+    # out_video_path=os.path.join(r'C:\Users\Administrator\Desktop\app_test\generated-videos',os.path.basename(video_path).split('.')[0]+'.avi')
+    # # framepath = os.path.join(r'C:\Users\Administrator\Desktop\dwl\240122OvarySeg\project\log\24-4-15-test-video',
+    # #                          os.path.basename(video_path).split('.')[0] + '_f' + str(0).zfill(4) + '_0.png')
+    # img = cv2.imdecode(np.fromfile(framepath, dtype=np.uint8), flags=cv2.IMREAD_COLOR)
+    # # print(img.shape)
+
+    return image_path,predList,p0List,p1List,p2List
+
+def main(device):
+    opt = parse_option()
+
+    model_path=r".\segmodel\epoch19-0.9703952223063982-88.81376262626276-82.25021750388382.pth"
+    model = OvaMTA_OVASEG(training=True).to(device)
+    model_state = torch.load(model_path)
+    model.load_state_dict(model_state)
+
+    model_BM = OvaMTA_CLF(training=True).to(device)
+    model_state = torch.load(r".\diagmodel\BM\BM-95.5531661237785-0.9256709832918011-0.7748959561863705.pth")
+    # model_state = torch.load(r".\diagmodel\epoch16-94.87093406593395-0.8697274003396451-0.7828489620615605.pth")
+    model_BM.load_state_dict(model_state)
+
+    image_pathL=glob.glob(r"D:\Research\241017组学Her2\数据11.12（已核对）\+DL数据11.12（已核对）\训练数据\DL\DL-HER2阳性\*.jpg")
+    for image_path in image_pathL:
+        image_path, predList, p0List, p1List, p2List=pred_image(model,model_BM,device,opt,image_path)
+
+if __name__ == '__main__':
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    main(device)
