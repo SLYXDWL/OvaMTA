@@ -370,16 +370,15 @@ def pred_video(model,model_BM,device,params,video_path):
 def main(device):
     opt = parse_option()
 
-    model_path=r".\segmodel\epoch19-0.9703952223063982-88.81376262626276-82.25021750388382.pth"
+    model_path=r".\segmodel\model_seg.pth"
     model = OvaMTA_OVASEG(training=True).to(device)
     model_state = torch.load(model_path)
     model.load_state_dict(model_state)
 
     model_BM = OvaMTA_CLF(training=True).to(device)
-    model_state = torch.load(r".\diagmodel\BM\epoch16-95.5531661237785-0.9256709832918011-0.7748959561863705.pth")
-    # model_state = torch.load(r".\diagmodel\epoch16-94.87093406593395-0.8697274003396451-0.7828489620615605.pth")
+    model_state = torch.load(r".\diagmodel\BM\model_bm.pth")
     model_BM.load_state_dict(model_state)
-    'D:\Research\231118卵巢\240124卵巢分割\原视频'
+    
     video_pathList=glob.glob(r"D:\Research\231118卵巢\240124卵巢分割\原视频\*\*.mp4")
     df_=pd.read_csv(r"C:\Users\Administrator\Desktop\app_test\ORADS以及人机判读test_video.csv",encoding='ANSI')
     print(video_pathList)
