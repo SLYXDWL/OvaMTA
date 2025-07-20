@@ -98,6 +98,7 @@ def get_mask(lateral_map_5, lateral_map_4, lateral_map_3, lateral_map_2, frameli
 
     res = np.array(res[0, :, :] > 0, dtype=np.uint8)
     return res
+    
 def patch_mask2mask(patch_mask, images, x1, x2, y1, y2):
     mask = np.zeros((images.shape[0], images.shape[1]))
     mask[x1:x2, y1:y2] = cv2.resize(patch_mask, ( y2 - y1,x2 - x1), interpolation=cv2.INTER_NEAREST)
@@ -454,17 +455,17 @@ def main(device):
     opt = parse_option()
     print(torch.cuda.is_available())
 
-    model_path=r".\segmodel\epoch19-0.9703952223063982-88.81376262626276-82.25021750388382.pth"
+    model_path=r".\segmodel\model_seg.pth"
     model = OvaMTA_OVASEG(training=True).to(device)
     model_state = torch.load(model_path)
     model.load_state_dict(model_state)
 
     model_BM = OvaMTA_CLF(training=True).to(device)
-    model_state = torch.load(r".\diagmodel\BM\BM-95.5531661237785-0.9256709832918011-0.7748959561863705.pth")
+    model_state = torch.load(r".\diagmodel\BM\model_bm.pth")
     model_BM.load_state_dict(model_state)
 
     model_MB = OvaMTA_CLF(training=True).to(device)
-    model_state = torch.load(r".\diagmodel\MB\MB-94.87093406593395-0.8697274003396451-0.7828489620615605.pth")
+    model_state = torch.load(r".\diagmodel\MB\model_mb.pth")
     model_MB.load_state_dict(model_state)
 
     Borderline_idL=['US-Ovary202006201','US-Ovary2021020611','US-Ovary202105201','US-Ovary202106034',
