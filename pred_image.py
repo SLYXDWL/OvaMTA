@@ -360,17 +360,17 @@ def pred_image(model,model_BM,device,params,image_path):
 def main(device):
     opt = parse_option()
 
-    model_path=r".\segmodel\epoch19-0.9703952223063982-88.81376262626276-82.25021750388382.pth"
+    model_path=r".\segmodel\model_seg.pth"
     model = OvaMTA_OVASEG(training=True).to(device)
     model_state = torch.load(model_path)
     model.load_state_dict(model_state)
 
     model_BM = OvaMTA_CLF(training=True).to(device)
-    model_state = torch.load(r".\diagmodel\BM\BM-95.5531661237785-0.9256709832918011-0.7748959561863705.pth")
-    # model_state = torch.load(r".\diagmodel\epoch16-94.87093406593395-0.8697274003396451-0.7828489620615605.pth")
+    model_state = torch.load(r".\diagmodel\BM\model_bm.pth")
+    
     model_BM.load_state_dict(model_state)
 
-    image_pathL=glob.glob(r"D:\Research\241017组学Her2\数据11.12（已核对）\+DL数据11.12（已核对）\训练数据\DL\DL-HER2阳性\*.jpg")
+    image_pathL=glob.glob(r"data\*.jpg")
     for image_path in image_pathL:
         image_path, predList, p0List, p1List, p2List=pred_image(model,model_BM,device,opt,image_path)
 
