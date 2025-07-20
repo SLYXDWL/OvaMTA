@@ -376,7 +376,7 @@ if __name__ == '__main__':
 
     # ---- build models ----
     model = TransRaUNet_CLF_xiaorong(training=True).to(device)
-    model_state = torch.load(r'.\diagmodel\BM\BM-95.5531661237785-0.9256709832918011-0.7748959561863705.pth')
+    model_state = torch.load(r'.\diagmodel\BM\model_bm.pth')
     model.load_state_dict(model_state)
 
     pg = [p for p in model.parameters() if p.requires_grad]
