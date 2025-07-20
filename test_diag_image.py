@@ -306,9 +306,9 @@ def parse_option():
     opt = parser.parse_args()
     return opt
 
-TYPE = 'MB2'
-num_class = 2
-class_names = ['Borderline', 'Malignant']
+# TYPE = 'MB2'
+# num_class = 2
+# class_names = ['Borderline', 'Malignant']
 if __name__ == '__main__':
     opt = parse_option()
 
@@ -318,8 +318,7 @@ if __name__ == '__main__':
     ckpt_dir, epochs_dir, log_fd, train_writer, val_writer = prepare_logger(opt)
     # model = create_model(num_classes=opt.num_classes, has_logits=False).to(device)
     model = OvaMTA_CLF(training=True).to(device)
-    model_state = torch.load(r".\diagmodel\epoch16-95.5531661237785-0.9256709832918011-0.7748959561863705.pth")
-    # model_state = torch.load(r".\diagmodel\epoch16-94.87093406593395-0.8697274003396451-0.7828489620615605.pth")
+    model_state = torch.load(r".\diagmodel\model_diag.pth")
     model.load_state_dict(model_state)
 
     log(log_fd, 'Loading Data...')
