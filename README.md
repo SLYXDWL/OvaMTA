@@ -2,7 +2,7 @@
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC_BY--NC--ND_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
 **Official PyTorch implementation of the deep learning pipeline for ovarian mass diagnosis from ultrasound screening**  
-*(Retrospective Multicenter Study | Lancet 2024)*
+*(Retrospective Multicenter Study | eClinicalMedicine 2024)*
 
 ## 📖 Overview
 OvaMTA is an automated AI system for:
@@ -37,7 +37,12 @@ conda activate ovamta
 
 # Install dependencies
 pip install -r requirement.txt
+pip install timm matplotlib thop prettytable tensorboardX scikit-learn pandas
 ```
+Download pvt_v2_b2.pth from following link：https://pan.baidu.com/s/12hAO6-HMhkIm2NI0jqANPA?pwd=ik3z
+password: ik3z 
+
+ps: Install torch and torchvision based on system type (windows or linux), GPU type, and CUDA version.
 
 ## 🏥 Data Preparation
 Data organization: Managed via Excel files (240108-image-based-BM.xlsx) with dedicated sheets for different data splits (train/val/test). Per-sample metadata:
