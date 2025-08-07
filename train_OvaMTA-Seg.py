@@ -395,7 +395,7 @@ if __name__ == '__main__':
     test_dataloader = get_loader(mode='test', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
     ra_test_dataloader = get_loader(mode='ra_test', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
     ra_test_nc_dataloader = get_loader(mode='ra_test_noca125', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
-    train_loader = get_loader(mode='train', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=True)
+    train_loader = get_loader(mode='train', batchsize=opt.batchsize, trainsize=opt.trainsize, shuffle=True)
     total_step = len(train_loader)
     log(log_fd, "Dataset loaded!")
     print("#"*20, "Start Training", "#"*20)
@@ -413,6 +413,7 @@ if __name__ == '__main__':
             val_step += 1
 
     log_fd.close()
+
 
 
 
