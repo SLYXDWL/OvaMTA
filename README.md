@@ -28,7 +28,7 @@ Achieving performance comparable to senior radiologists (AUC: 0.911 on video dat
 
 ## ⚙️ Installation
 ```bash
-git clone https://github.com/SLYXDWI/OvaMTA.git
+git clone https://github.com/SLYXDWL/OvaMTA.git
 cd OvaMTA
 
 # Create conda environment
