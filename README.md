@@ -36,7 +36,7 @@ conda create -n ovamta python=3.10
 conda activate ovamta
 
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirement.txt
 ```
 
 ## 🏥 Data Preparation
