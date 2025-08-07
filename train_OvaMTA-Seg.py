@@ -30,12 +30,12 @@ class SegDataset(data.Dataset):
     def __init__(self,
                  trainsize,
                  augmentations,
-                 file_excel = r"C:\Users\Administrator\Desktop\Table-OvaSeg\240108-image-based.xlsx",
+                 file_excel = r"..\Table-OvaSeg\240108-image-based.xlsx",
                  mode = "train"):
         self.augmentations = augmentations
         self.trainsize = trainsize
         self.mode = mode
-        self.root = Path("C:/Users/Administrator/Desktop/Table-OvaSeg/")
+        self.root = Path("../Table-OvaSeg/")
         df = pd.read_excel(file_excel,sheet_name=mode)
         # print(df,mode)
         self.infos = df
@@ -377,8 +377,10 @@ if __name__ == '__main__':
 
     # ---- build models ----
     model = TransRaUNet_CLF_xiaorong(training=True).to(device)
-    model_state = torch.load(r'.\diagmodel\BM\model_bm.pth')
-    model.load_state_dict(model_state)
+    model_path = r'.\diagmodel\BM\model_bm.pth'
+    if os.path.exists(model_path):
+        model_state = torch.load(model_path)
+        model.load_state_dict(model_state)
 
     pg = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(pg, opt.lr, weight_decay=1e-4)
@@ -388,7 +390,7 @@ if __name__ == '__main__':
     test_dataloader = get_loader(mode='test', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
     ra_test_dataloader = get_loader(mode='ra_test', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
     ra_test_nc_dataloader = get_loader(mode='ra_test_noca125', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
-    train_loader = get_loader(mode='train', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=False)
+    train_loader = get_loader(mode='train', batchsize=opt.testbatchsize, trainsize=opt.trainsize, shuffle=True)
     total_step = len(train_loader)
     log(log_fd, "Dataset loaded!")
     print("#"*20, "Start Training", "#"*20)
@@ -399,7 +401,7 @@ if __name__ == '__main__':
     for epoch in range(1, opt.epoch):
         adjust_lr(optimizer, opt.lr, epoch, opt.decay_rate, opt.decay_epoch)
         # WarmupMultiStepLR(optimizer, [10, 30, 50, 70],warmup_iters=10)
-        # train_step=train(train_loader, model, optimizer, epoch,train_step,log_fd,device)
+        train_step=train(train_loader, model, optimizer, epoch,train_step,log_fd,device)
         # scheduler.step()
         if (epoch + 1) % 1 == 0:
             val_save(train_loader,val_dataloader, test_dataloader, ra_test_dataloader,ra_test_nc_dataloader, model,log_fd,opt)
