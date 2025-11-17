@@ -84,7 +84,7 @@ If you use this work, please cite:
 @article{dai2024development,
   title={Development and validation of a deep learning pipeline to diagnose ovarian masses using ultrasound screening},
   author={Dai, Wen-Li and Wu, Ying-Nan and Ling, Ya-Ting and Zhao, Jing and Zhang, Shuang and Gu, Zhao-Wen and Gong, Li-Ping and Zhu, Man-Ning and Dong, Shuang and Xu, Song-Cheng and Wu, Lei and Sun, Li-Tao and Kong, De-Xing},
-  journal={The Lancet},
+  journal={eClinicalMedicine},
   volume={78},
   pages={102923},
   year={2024},
