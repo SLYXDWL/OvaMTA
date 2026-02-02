@@ -41,6 +41,8 @@ pip install timm matplotlib thop prettytable tensorboardX scikit-learn pandas
 ```
 Download pvt_v2_b2.pth from following link：https://pan.baidu.com/s/12hAO6-HMhkIm2NI0jqANPA?pwd=ik3z
 password: ik3z 
+or
+Download pvt_v2_b2.pth from following link：https://drive.google.com/file/d/1Hwp45QIF8zSIBfaXcdaIB4hLXdLXSQkg/view?usp=drive_link
 
 ps: Install torch and torchvision based on system type (windows or linux), GPU type, and CUDA version.
 
